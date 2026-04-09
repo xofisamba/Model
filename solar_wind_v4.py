@@ -1897,6 +1897,127 @@ elif st.session_state.active_sheet == "📋 Scenarios":
     with col4:
         st.metric("💎 Equity", f"{calculate_equity_amount():,.0f} k€")
 
+    # ========================================================================
+    # SCENARIO COMPARISON
+    # ========================================================================
+    st.markdown("---")
+    st.subheader("📊 Scenario Comparison")
+    st.caption("Compare key metrics across different probability scenarios")
+    
+    def get_scenario_metrics(yield_type='P50'):
+        """Calculate metrics for a specific yield scenario"""
+        # Save original yield
+        orig_p90 = st.session_state.yield_p90
+        orig_p50 = st.session_state.yield_p50
+        orig_p99 = st.session_state.yield_p99
+        
+        # Set yield based on scenario
+        if yield_type == 'P90':
+            st.session_state.yield_p90 = st.session_state.yield_p90
+            st.session_state.yield_p50 = st.session_state.yield_p90 * 1.18 if st.session_state.technology == 'Solar' else st.session_state.yield_p90 * 1.14
+        elif yield_type == 'P50':
+            st.session_state.yield_p50 = st.session_state.yield_p50
+            st.session_state.yield_p90 = st.session_state.yield_p50 / 1.18 if st.session_state.technology == 'Solar' else st.session_state.yield_p50 / 1.14
+        elif yield_type == 'P99':
+            st.session_state.yield_p99 = st.session_state.yield_p99
+            st.session_state.yield_p90 = st.session_state.yield_p99 * 1.18 if st.session_state.technology == 'Solar' else st.session_state.yield_p99 * 1.14
+        
+        # Calculate metrics
+        capex = calculate_total_capex()
+        debt = calculate_debt_amount()
+        equity = calculate_equity_amount()
+        lcoe = calculate_lcoe()
+        avg_dscr = calculate_avg_dscr()
+        payback = calculate_payback()
+        
+        # Calculate IRR
+        cash_flows = [-equity]
+        for year in range(1, st.session_state.investment_horizon + 1):
+            revenue = calculate_revenue(year)
+            opex = calculate_opex_year(year)
+            ebitda = revenue - opex
+            tax = calculate_tax(year)
+            debt_service = get_debt_service(year)
+            fcf_equity = ebitda - tax - debt_service
+            cash_flows.append(fcf_equity)
+        
+        try:
+            import numpy as np
+            irr = np.irr(cash_flows) * 100
+            if np.isnan(irr):
+                irr = 0
+        except:
+            irr = 0
+        
+        # Restore original yields
+        st.session_state.yield_p90 = orig_p90
+        st.session_state.yield_p50 = orig_p50
+        st.session_state.yield_p99 = orig_p99
+        
+        return {
+            'capex': capex,
+            'debt': debt,
+            'equity': equity,
+            'lcoe': lcoe,
+            'dscr': avg_dscr,
+            'payback': payback,
+            'irr': irr
+        }
+    
+    # Calculate metrics for each scenario
+    if st.session_state.technology == 'Solar':
+        base_metrics = get_scenario_metrics('P90')
+        investor_metrics = get_scenario_metrics('P50')
+        stress_metrics = get_scenario_metrics('P99')
+    else:
+        base_metrics = get_scenario_metrics('P90')
+        investor_metrics = get_scenario_metrics('P50')
+        stress_metrics = get_scenario_metrics('P99')
+    
+    # Display comparison table
+    comparison_data = {
+        'Metric': ['LCOE (€/MWh)', 'IRR (%)', 'Avg DSCR (x)', 'Payback (years)', 'CAPEX (k€)', 'Debt (k€)', 'Equity (k€)'],
+        '📉 Base (P90)': [
+            f"{base_metrics['lcoe']:.1f}",
+            f"{base_metrics['irr']:.1f}",
+            f"{base_metrics['dscr']:.2f}",
+            f"{base_metrics['payback']:.1f}",
+            f"{base_metrics['capex']:,.0f}",
+            f"{base_metrics['debt']:,.0f}",
+            f"{base_metrics['equity']:,.0f}"
+        ],
+        '💼 Investor (P50)': [
+            f"{investor_metrics['lcoe']:.1f}",
+            f"{investor_metrics['irr']:.1f}",
+            f"{investor_metrics['dscr']:.2f}",
+            f"{investor_metrics['payback']:.1f}",
+            f"{investor_metrics['capex']:,.0f}",
+            f"{investor_metrics['debt']:,.0f}",
+            f"{investor_metrics['equity']:,.0f}"
+        ],
+        '⚠️ Stress (P99)': [
+            f"{stress_metrics['lcoe']:.1f}",
+            f"{stress_metrics['irr']:.1f}",
+            f"{stress_metrics['dscr']:.2f}",
+            f"{stress_metrics['payback']:.1f}",
+            f"{stress_metrics['capex']:,.0f}",
+            f"{stress_metrics['debt']:,.0f}",
+            f"{stress_metrics['equity']:,.0f}"
+        ]
+    }
+    
+    comparison_df = pd.DataFrame(comparison_data)
+    st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+    
+    # Color legend
+    st.markdown("""
+    <div style="display: flex; gap: 20px; margin-top: 10px; font-size: 12px;">
+        <span>📉 <b>Base (P90)</b> - P90 yield, conservative</span>
+        <span>💼 <b>Investor (P50)</b> - P50 yield, expected</span>
+        <span>⚠️ <b>Stress (P99)</b> - P99 yield, pessimistic</span>
+    </div>
+    """, unsafe_allow_html=True)
+
 # ============================================================================
 # SHEET: CAPEX
 # ============================================================================
