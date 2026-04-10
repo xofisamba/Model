@@ -1382,7 +1382,6 @@ def calculate_tax(year):
     else:
         return taxable * st.session_state.corporate_tax_rate
 
-@st.cache_data(ttl=300)
 def calculate_annual_debt_service():
     """Calculate annual debt service (equal payments - standard annuity)"""
     debt = calculate_debt_amount()
@@ -1449,7 +1448,6 @@ def get_debt_service(year):
             return calculate_annual_debt_service()
         return 0
 
-@st.cache_data(ttl=300)
 def calculate_debt_amount():
     """Calculate debt amount based on technology and sizing"""
     total_capex = calculate_total_capex()
@@ -1629,7 +1627,6 @@ def calculate_plcr(year, discount_rate=0.08):
         return npv_future / remaining_debt
     return 0
 
-@st.cache_data(ttl=300)
 def calculate_monte_carlo(sims=1000):
     """Monte Carlo simulation for yield uncertainty"""
     results = []
