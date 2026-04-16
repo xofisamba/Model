@@ -1337,6 +1337,24 @@ def render_kpi_grid():
     ann_rev = calculate_revenue(1)
     payback = calculate_payback()
     
+    # PySAM enhanced metrics (vSAM)
+    tech = st.session_state.technology
+    pysam_data = None
+    pysam_cf = None
+    
+    if PYSAM_AVAILABLE:
+        try:
+            capacity = st.session_state.wind_capacity if tech == "Wind" else st.session_state.capacity_dc
+            if tech == "Wind":
+                hub_height = st.session_state.get('hub_height', 100)
+                wind_speed = st.session_state.get('wind_speed', 7.5)
+                pysam_data = get_pysam_wind_generation(capacity, hub_height, wind_speed)
+            else:
+                pysam_data = get_pysam_solar_generation(capacity)
+        except Exception as e:
+            warnings.warn(f"PySAM calculation error: {e}")
+    
+    # Standard KPI cards
     kpi_cards = [
         {"icon": "💰", "label": "Total CAPEX", "value": f"{total_capex:,.0f}", "sub": "kEUR Investment", "type": ""},
         {"icon": "🏦", "label": "Debt", "value": f"{debt:,.0f}", "sub": f"{st.session_state.gearing_ratio*100:.0f}% Leverage", "type": "accent"},
@@ -1347,6 +1365,25 @@ def render_kpi_grid():
         {"icon": "📊", "label": "Avg DSCR", "value": f"{dscr:.2f}x", "sub": f"Target: {st.session_state.target_dscr:.2f}x", "type": "warning" if dscr < st.session_state.target_dscr else "success"},
         {"icon": "⏱️", "label": "Payback", "value": f"{payback:.1f}", "sub": "Years", "type": "accent"},
     ]
+    
+    # Add PySAM metrics if available
+    if pysam_data:
+        pysam_label = "☀️ PySAM Solar" if tech == "Solar" else "🌀 PySAM Wind"
+        kpi_cards.insert(4, {
+            "icon": "🔬", 
+            "label": pysam_label, 
+            "value": f"{pysam_data.get('capacity_factor', 0)*100:.1f}%" if pysam_data.get('capacity_factor') else "N/A", 
+            "sub": f"CF (PySAM)", 
+            "type": "info"
+        })
+        if pysam_data.get('annual_energy_p90'):
+            kpi_cards.insert(5, {
+                "icon": "📉", 
+                "label": "P90 Energy", 
+                "value": f"{pysam_data['annual_energy_p90']:,.0f}", 
+                "sub": "MWh (PySAM)", 
+                "type": ""
+            })
     
     cards_html = '<div class="kpi-grid">'
     for card in kpi_cards:
