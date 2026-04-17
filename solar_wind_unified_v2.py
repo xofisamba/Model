@@ -611,12 +611,42 @@ if 'target_dscr' not in st.session_state:
     st.session_state.target_dscr = 1.15
 if 'debt_sculpting' not in st.session_state:
     st.session_state.debt_sculpting = True
+if 'debt_sizing_method' not in st.session_state:
+    st.session_state.debt_sizing_method = "DSCR-Based (Sculpted)"  # Gearing Ratio, DSCR-Based (Annuity), DSCR-Based (Sculpted)
 if 'corporate_tax_rate' not in st.session_state:
     st.session_state.corporate_tax_rate = 0.10
 if 'depreciation_rate' not in st.session_state:
     st.session_state.depreciation_rate = 1.0 / st.session_state.get('investment_horizon', 30)  # Auto 1/period
 if 'depreciation_period' not in st.session_state:
     st.session_state.depreciation_period = st.session_state.get('investment_horizon', 30)  # Auto-match investment horizon
+
+# ===== THIN CAP RULE (Interest Limitation) =====
+# Based on ATAD and local jurisdictions
+THIN_CAP_JURISDICTIONS = {
+    "None (No restriction)": {"type": "none", "ebitda_limit": None, "de_ratio": None, "min_amount": None},
+    "ATAD Standard (30% EBITDA)": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": 3000000},
+    "Croatia (HR) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": 3000000},
+    "Slovenia (SI) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": 3000000},
+    "Germany (DE) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": 3000000},
+    "France (FR) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": 3000000},
+    "Austria (AT) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": 4.0, "min_amount": 3000000},
+    "Italy (IT) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": None},
+    "Netherlands (NL) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": 1000000},
+    "Belgium (BE) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": 5.0, "min_amount": 3000000},
+    "Spain (ES) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": None},
+    "Serbia (RS) - D/E Ratio": {"type": "de_ratio", "ebitda_limit": None, "de_ratio": 4.0, "min_amount": None},
+    "Bosnia (BA) - D/E Ratio": {"type": "de_ratio", "ebitda_limit": None, "de_ratio": 4.0, "min_amount": None},
+    "Montenegro (ME) - EU Standard": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": None},
+    "North Macedonia (MK) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": None},
+    "UK - ATAD-like": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": None},
+    "Poland (PL) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": None, "min_amount": 3000000},
+    "Czech Republic (CZ) - ATAD": {"type": "atad", "ebitda_limit": 0.30, "de_ratio": 4.0, "min_amount": None},
+}
+
+if 'thin_cap_jurisdiction' not in st.session_state:
+    st.session_state.thin_cap_jurisdiction = "None (No restriction)"
+if 'thin_cap_equity' not in st.session_state:
+    st.session_state.thin_cap_equity = 15000  # kEUR - equity base for D/E calculation
 if 'senior_debt_margin' not in st.session_state:
     st.session_state.senior_debt_margin = 0.028
 if 'base_rate' not in st.session_state:
@@ -650,6 +680,12 @@ if 'investment_horizon' not in st.session_state:
     st.session_state.investment_horizon = 30
 if 'construction_period' not in st.session_state:
     st.session_state.construction_period = 12
+if 'semi_annual_mode' not in st.session_state:
+    st.session_state.semi_annual_mode = False  # Semi-annual periods (2x periods per year)
+if 'idc_capitalization' not in st.session_state:
+    st.session_state.idc_capitalization = True  # Capitalize IDC in CAPEX
+if 'idc_rate' not in st.session_state:
+    st.session_state.idc_rate = 0.06  # 6% IDC rate
 if 'availability_wind' not in st.session_state:
     st.session_state.availability_wind = 0.95
 if 'turbine_rating' not in st.session_state:
@@ -672,6 +708,14 @@ if 'cash_sweep_enabled' not in st.session_state:
     st.session_state.cash_sweep_enabled = False
 if 'cash_sweep_threshold' not in st.session_state:
     st.session_state.cash_sweep_threshold = 1.2
+if 'dsra_enabled' not in st.session_state:
+    st.session_state.dsra_enabled = True  # Debt Service Reserve Account
+if 'dsra_months' not in st.session_state:
+    st.session_state.dsra_months = 6  # DSRA = 6 months of debt service
+if 'mra_enabled' not in st.session_state:
+    st.session_state.mra_enabled = False  # Maintenance Reserve Account
+if 'mra_months' not in st.session_state:
+    st.session_state.mra_months = 3  # MRA = 3 months of Opex
 if 'dscr_market' not in st.session_state:
     st.session_state.dscr_market = False
 if 'p99_debt_sizing' not in st.session_state:
@@ -1146,7 +1190,7 @@ def render_kpi_grid():
     total_capex = calculate_total_capex()
     debt = calculate_debt_amount()
     equity = calculate_equity_amount()
-    project_irr = calculate_project_irr([-total_capex] + [calculate_ebitda(y) - calculate_tax(y) for y in range(1, 30)])
+    project_irr = calculate_project_irr([-total_capex] + [calculate_ebitda(y) - calculate_tax(y, 0)[0] for y in range(1, 30)])
     dscr = calculate_avg_dscr()
     lcoe = calculate_lcoe()
     ann_gen = calculate_annual_generation()
@@ -1263,6 +1307,14 @@ def calculate_total_capex():
         bess_capex = st.session_state.bess_capacity_mwh * st.session_state.bess_cost_per_mwh / 1000  # kEUR
         base_capex += bess_capex
     
+    # Add IDC (Interest During Construction) if capitalization enabled
+    if st.session_state.idc_capitalization:
+        construction_months = st.session_state.construction_period
+        # Simplified IDC: CAPEX * (construction_period/12/2) * idc_rate
+        # Assumes interest accrues on average over half the construction period
+        idc = base_capex * (construction_months / 12 / 2) * st.session_state.idc_rate
+        base_capex += idc
+    
     return base_capex
 
 def calculate_bess_capex():
@@ -1326,14 +1378,20 @@ def calculate_annual_generation(yield_hours=None):
     
     capacity = get_capacity()
     
+    # Semi-annual adjustment
+    periods_per_year = 2 if st.session_state.semi_annual_mode else 1
+    
     if st.session_state.technology == "Wind":
         # Apply availability and curtailment
         availability = st.session_state.availability_wind
         curtailment_factor = 1 - st.session_state.curtailment / 100
         wake_factor = 1 - st.session_state.wake_effects / 100
-        return capacity * yield_hours * availability * curtailment_factor * wake_factor
+        base_gen = capacity * yield_hours * availability * curtailment_factor * wake_factor
     else:
-        return capacity * yield_hours
+        base_gen = capacity * yield_hours
+    
+    # Adjust for semi-annual mode (generation is per HALF-year in semi-annual)
+    return base_gen / periods_per_year
 
 def calculate_revenue(year, yield_hours=None):
     """Calculate annual revenue in k€"""
@@ -1369,18 +1427,63 @@ def calculate_ebitda(year, yield_hours=None):
     """Calculate EBITDA"""
     return calculate_revenue(year, yield_hours) - calculate_opex_year(year)
 
-def calculate_tax(year):
-    """Calculate income tax"""
+def calculate_tax(year, accumulated_losses=0):
+    """Calculate income tax with ATAD interest limitation and loss carryforward
+    
+    Args:
+        year: Current operating year
+        accumulated_losses: Tax losses brought forward from previous years
+    """
     ebitda = calculate_ebitda(year)
     depreciation = calculate_total_capex() * st.session_state.depreciation_rate
-    taxable = max(0, ebitda - depreciation)
+    interest_rate = calculate_interest_rate()
+    total_debt = calculate_debt_amount()
+    
+    # Calculate interest expense
+    if year <= st.session_state.debt_tenor:
+        avg_debt = total_debt * 0.5  # Simplified average debt
+        interest_expense = avg_debt * interest_rate
+    else:
+        interest_expense = 0
+    
+    # ===== THIN CAP RULE - Interest Limitation =====
+    thin_cap_info = THIN_CAP_JURISDICTIONS.get(st.session_state.thin_cap_jurisdiction, THIN_CAP_JURISDICTIONS["None (No restriction)"])
+    
+    if thin_cap_info['type'] == 'atad':
+        # ATAD rule: interest limited to 30% of EBITDA (or EUR 3M minimum)
+        ebitda_for_tax = max(0, ebitda - depreciation)  # Tax EBITDA
+        max_interest = ebitda_for_tax * thin_cap_info['ebitda_limit'] if thin_cap_info['ebitda_limit'] else float('inf')
+        if thin_cap_info['min_amount']:
+            max_interest = max(max_interest, thin_cap_info['min_amount'])
+        deductible_interest = min(interest_expense, max_interest)
+        disallowed_interest = interest_expense - deductible_interest
+    elif thin_cap_info['type'] == 'de_ratio':
+        # D/E Ratio rule: interest limited by debt-to-equity ratio
+        max_debt = st.session_state.thin_cap_equity * thin_cap_info['de_ratio']
+        actual_debt = min(total_debt, max_debt)
+        deductible_interest = actual_debt * interest_rate
+        disallowed_interest = max(0, interest_expense - deductible_interest)
+    else:
+        # No restriction
+        deductible_interest = interest_expense
+        disallowed_interest = 0
+    
+    # EBT = EBITDA - Depreciation - Deductible Interest (after thin cap)
+    ebt = max(0, ebitda - depreciation - deductible_interest)
+    
+    # Apply loss carryforward - can offset taxable income
+    taxable_income = max(0, ebt - accumulated_losses)
     
     tech = st.session_state.technology
     if tech == "Wind":
-        # Wind might have tax holidays or lower rates in early years
-        return taxable * st.session_state.corporate_tax_rate
+        tax = taxable_income * st.session_state.corporate_tax_rate
     else:
-        return taxable * st.session_state.corporate_tax_rate
+        tax = taxable_income * st.session_state.corporate_tax_rate
+    
+    # Tax loss for next year = any unused interest disallowance + unused deductions
+    new_losses = max(0, accumulated_losses - ebt) + disallowed_interest
+    
+    return max(0, tax), deductible_interest, disallowed_interest, new_losses
 
 def calculate_annual_debt_service():
     """Calculate annual debt service (equal payments - standard annuity)"""
@@ -1392,33 +1495,44 @@ def calculate_annual_debt_service():
     return 0
 
 def calculate_sculpted_debt_schedule():
-    """Calculate sculpted debt service based on target DSCR
+    """"Calculate sculpted debt service based on target DSCR
     
     Debt sculpting adjusts annual payments so that DSCR never drops below target.
     Payment = EBITDA / Target_DSCR, scaled to ensure debt is repaid within tenor.
+    
+    Supports semi-annual mode: periods are doubled, each payment is halved.
     """
     debt = calculate_debt_amount()
     rate = calculate_interest_rate()
     tenor = st.session_state.debt_tenor
     target_dscr = st.session_state.target_dscr
+    semi_annual = st.session_state.semi_annual_mode
     
     if debt <= 0 or tenor <= 0:
-        return [0] * tenor
+        return [0] * (tenor * (2 if semi_annual else 1))
     
-    # Calculate raw sculpted payments (EBITDA / target DSCR) for each year
-    years = min(tenor, st.session_state.investment_horizon)
+    # Number of periods and rate per period
+    periods_per_year = 2 if semi_annual else 1
+    num_periods = tenor * periods_per_year
+    rate_per_period = rate / periods_per_year if rate > 0 else 0
+    
+    # Calculate raw sculpted payments (EBITDA / target DSCR) for each period
     raw_payments = []
-    for year in range(1, years + 1):
+    for period in range(1, num_periods + 1):
+        # Year corresponding to this period
+        year = (period - 1) // periods_per_year + 1
         ebitda = calculate_ebitda(year)
+        
+        # Adjust EBITDA for semi-annual (half-year EBITDA)
+        ebitda_per_period = ebitda / periods_per_year
+        
         # Raw payment to achieve target DSCR
-        raw_payment = ebitda / target_dscr if target_dscr > 0 else ebitda
+        raw_payment = ebitda_per_period / target_dscr if target_dscr > 0 else ebitda_per_period
         raw_payments.append(max(raw_payment, 0))  # Can't be negative
     
     # Calculate scaling factor so PV of scaled payments = debt
-    # PV = sum(scaled_payment / (1+r)^t) for t=1 to tenor
-    # scaling_factor = debt / PV(raw_payments)
-    if rate > 0:
-        pv_raw = sum(raw_payments[t] / ((1 + rate) ** (t + 1)) for t in range(len(raw_payments)))
+    if rate_per_period > 0:
+        pv_raw = sum(raw_payments[t] / ((1 + rate_per_period) ** (t + 1)) for t in range(len(raw_payments)))
     else:
         pv_raw = sum(raw_payments)
     
@@ -1432,6 +1546,40 @@ def calculate_sculpted_debt_schedule():
     
     return sculpted_schedule
 
+def calculate_sculpted_debt_schedule_for_debt(debt):
+    """Calculate sculpted debt service for a specific debt amount (helper for DSCR-based sizing)"""
+    rate = calculate_interest_rate()
+    tenor = st.session_state.debt_tenor
+    target_dscr = st.session_state.target_dscr
+    semi_annual = st.session_state.semi_annual_mode
+    
+    if debt <= 0 or tenor <= 0:
+        return [0] * (tenor * (2 if semi_annual else 1))
+    
+    periods_per_year = 2 if semi_annual else 1
+    num_periods = tenor * periods_per_year
+    rate_per_period = rate / periods_per_year if rate > 0 else 0
+    
+    raw_payments = []
+    for period in range(1, num_periods + 1):
+        year = (period - 1) // periods_per_year + 1
+        ebitda = calculate_ebitda(year)
+        ebitda_per_period = ebitda / periods_per_year
+        raw_payment = ebitda_per_period / target_dscr if target_dscr > 0 else ebitda_per_period
+        raw_payments.append(max(raw_payment, 0))
+    
+    if rate_per_period > 0:
+        pv_raw = sum(raw_payments[t] / ((1 + rate_per_period) ** (t + 1)) for t in range(len(raw_payments)))
+    else:
+        pv_raw = sum(raw_payments)
+    
+    if pv_raw > 0:
+        scaling_factor = debt / pv_raw
+    else:
+        scaling_factor = 1.0
+    
+    return [raw_payments[t] * scaling_factor for t in range(len(raw_payments))]
+
 def get_sculpted_debt_service(year):
     """Get sculpted debt service for a specific year"""
     schedule = calculate_sculpted_debt_schedule()
@@ -1439,29 +1587,112 @@ def get_sculpted_debt_service(year):
         return schedule[year - 1]
     return 0
 
-def get_debt_service(year):
-    """Get debt service for a specific year - sculpted or equal based on setting"""
-    if st.session_state.debt_sculpting:
-        return get_sculpted_debt_service(year)
+def get_debt_service(year, period_in_year=1):
+    """Get debt service for a specific period - sculpted or equal based on setting
+    
+    Args:
+        year: Operating year (1-indexed)
+        period_in_year: Period within year (1 for annual, 1 or 2 for semi-annual)
+    """
+    semi_annual = st.session_state.semi_annual_mode
+    
+    if semi_annual:
+        periods_per_year = 2
+        period_index = (year - 1) * periods_per_year + period_in_year
+        
+        if st.session_state.debt_sculpting:
+            schedule = calculate_sculpted_debt_schedule()
+            if 0 < period_index <= len(schedule):
+                return schedule[period_index - 1]
+            return 0
+        else:
+            # Equal payments split in half for semi-annual
+            if year <= st.session_state.debt_tenor:
+                return calculate_annual_debt_service() / periods_per_year
+            return 0
     else:
-        if year <= st.session_state.debt_tenor:
-            return calculate_annual_debt_service()
-        return 0
+        # Annual mode
+        if st.session_state.debt_sculpting:
+            return get_sculpted_debt_service(year)
+        else:
+            if year <= st.session_state.debt_tenor:
+                return calculate_annual_debt_service()
+            return 0
 
 def calculate_debt_amount():
-    """Calculate debt amount based on technology and sizing"""
+    """Calculate debt amount based on debt sizing method
+    
+    Supports:
+    - Gearing Ratio: debt = CAPEX × gearing_ratio
+    - DSCR-Based (Annuity): debt sized so annual payment = EBITDA/DSCR
+    - DSCR-Based (Sculpted): debt sized using sculpted payments maintaining DSCR
+    """
     total_capex = calculate_total_capex()
-    
     tech = st.session_state.technology
+    interest_rate = calculate_interest_rate()
+    tenor = st.session_state.debt_tenor
+    target_dscr = st.session_state.target_dscr
     
-    if tech == "Wind" and st.session_state.p99_debt_sizing:
-        # P99 debt sizing - more conservative
-        p99_yield = st.session_state.yield_p99
-        annual_ds = calculate_annual_debt_service_p99()
-        if annual_ds > 0 and st.session_state.target_dscr > 0:
-            # Size debt so that DSCR at P99 = target
-            return annual_ds * st.session_state.target_dscr * ((1 + calculate_interest_rate()) ** st.session_state.debt_tenor - 1) / (calculate_interest_rate() * (1 + calculate_interest_rate()) ** st.session_state.debt_tenor)
+    # Get EBITDA for sizing (use average of first 5 years)
+    ebitdas = [calculate_ebitda(y) for y in range(1, 6)]
+    avg_ebitda = sum(ebitdas) / len(ebitdas)
     
+    sizing_method = st.session_state.get('debt_sizing_method', 'Gearing Ratio')
+    
+    if "DSCR-Based" in sizing_method:
+        if "Annuity" in sizing_method:
+            # DSCR-Based Annuity: annual_DS = EBITDA / DSCR_target
+            # Using annuity formula: PV = PMT × [(1-(1+r)^-n)/r]
+            annual_payment = avg_ebitda / target_dscr if target_dscr > 0 else 0
+            if interest_rate > 0 and tenor > 0:
+                # PV of annuity = PMT × [1 - (1+r)^-n] / r
+                pv_factor = (1 - (1 + interest_rate) ** (-tenor)) / interest_rate
+                return annual_payment * pv_factor
+            return 0
+        else:
+            # DSCR-Based Sculpted: iteratively find debt such that sculpted payments work
+            # Goal: PV of sculpted payments = debt (at given interest rate)
+            # Start with bounds
+            low = 0
+            high = total_capex * 0.95  # Max possible debt
+            
+            # Start with annuity as initial guess (midpoint)
+            annual_payment = avg_ebitda / target_dscr if target_dscr > 0 else avg_ebitda
+            if interest_rate > 0 and tenor > 0:
+                pv_factor = (1 - (1 + interest_rate) ** (-tenor)) / interest_rate
+                initial_debt = annual_payment * pv_factor
+            else:
+                initial_debt = total_capex * st.session_state.gearing_ratio
+            debt = min(max(initial_debt, low + 1), high - 1)  # Ensure within bounds
+            
+            # Iterate to find debt where PV of sculpted payments = debt
+            for _ in range(100):
+                # Calculate sculpted payments for this debt
+                scaled_payments = calculate_sculpted_debt_schedule_for_debt(debt)
+                
+                # Calculate PV of payments at given interest rate
+                rate_per_period = interest_rate / (2 if st.session_state.semi_annual_mode else 1)
+                pv_of_payments = 0
+                for i, pmt in enumerate(scaled_payments):
+                    pv_of_payments += pmt / ((1 + rate_per_period) ** (i + 1))
+                
+                # If PV of payments ≈ debt, we found it
+                if abs(pv_of_payments - debt) < debt * 0.0001:
+                    break
+                
+                # Adjust debt based on PV comparison
+                if pv_of_payments > debt:
+                    # PV too high = debt too high
+                    high = debt
+                    debt = (debt + low) / 2
+                else:
+                    # PV too low = debt too low
+                    low = debt
+                    debt = (debt + high) / 2
+            
+            return max(0, min(debt, high))
+    
+    # Default: Gearing Ratio
     return total_capex * st.session_state.gearing_ratio
 
 def calculate_cash_sweep_schedule():
@@ -1545,7 +1776,7 @@ def calculate_payback():
         revenue = calculate_revenue(year)
         opex = calculate_opex_year(year)
         ebitda = revenue - opex
-        tax = calculate_tax(year)
+        tax, _, _, _ = calculate_tax(year)
         debt_service = get_debt_service(year)
         fcf_equity = ebitda - tax - debt_service
         cumulative_cf += fcf_equity
@@ -2012,10 +2243,38 @@ elif st.session_state.active_sheet == "📋 Scenarios":
     with col1:
         st.session_state.corporate_tax_rate = st.number_input("Corporate Tax Rate (%)", value=float(st.session_state.corporate_tax_rate * 100), min_value=0.0, max_value=50.0, step=0.5) / 100
     with col2:
+        # Thin Cap Rule jurisdiction selection
+        thin_cap_options = list(THIN_CAP_JURISDICTIONS.keys())
+        thin_cap_idx = thin_cap_options.index(st.session_state.thin_cap_jurisdiction) if st.session_state.thin_cap_jurisdiction in thin_cap_options else 0
+        selected_thin_cap = st.selectbox("Thin Cap Rule (Interest Limitation)", thin_cap_options, index=thin_cap_idx)
+        st.session_state.thin_cap_jurisdiction = selected_thin_cap
+        thin_cap_info = THIN_CAP_JURISDICTIONS[selected_thin_cap]
+        if thin_cap_info['type'] != 'none':
+            if thin_cap_info['de_ratio']:
+                st.caption(f"D/E ratio: {thin_cap_info['de_ratio']}:1 | EBITDA limit: {thin_cap_info['ebitda_limit']*100 if thin_cap_info['ebitda_limit'] else 'N/A'}%")
+            else:
+                st.caption(f"EBITDA limit: {thin_cap_info['ebitda_limit']*100}% | Min: {thin_cap_info['min_amount']/1000000:.1f}M €" if thin_cap_info['min_amount'] else "EBITDA limit: 30%")
+    with col3:
+        if thin_cap_info['type'] == 'de_ratio':
+            st.session_state.thin_cap_equity = st.number_input("Equity for D/E (k€)", value=int(st.session_state.thin_cap_equity), min_value=1000, step=1000)
+        else:
+            st.session_state.thin_cap_equity = st.number_input("Equity for D/E (k€)", value=int(st.session_state.thin_cap_equity), min_value=1000, step=1000)
+    with col2:
         saved_cp = max(6, int(st.session_state.construction_period)) if hasattr(st.session_state, 'construction_period') else 12
         st.session_state.construction_period = st.number_input("Construction Period (months)", value=saved_cp, min_value=6, max_value=36, step=1)
     with col3:
         st.session_state.apply_inflation = st.checkbox("Apply Inflation", value=st.session_state.apply_inflation if hasattr(st.session_state, 'apply_inflation') else True)
+        st.session_state.semi_annual_mode = st.checkbox("Semi-Annual Periods", value=st.session_state.semi_annual_mode, help="Toggle between annual (1x) and semi-annual (2x) modeling periods")
+    
+    # IDC Calculation section
+    with st.expander("💰 IDC - Interest During Construction", expanded=False):
+        st.session_state.idc_capitalization = st.checkbox("Capitalize IDC in CAPEX", value=st.session_state.idc_capitalization if hasattr(st.session_state, 'idc_capitalization') else True)
+        st.session_state.idc_rate = st.slider("IDC Rate (%)", min_value=0.0, max_value=15.0, value=float(st.session_state.idc_rate * 100) if hasattr(st.session_state, 'idc_rate') else 6.0, step=0.5) / 100 if hasattr(st.session_state, 'idc_rate') else 0.06
+        if st.session_state.idc_capitalization:
+            construction_months = st.session_state.construction_period
+            idc_estimate = calculate_total_capex() * (construction_months / 12 / 2) * st.session_state.idc_rate
+            st.caption(f"Est. IDC: ~{idc_estimate:,.0f} k€ (capitalized during {construction_months}-month construction)")
+
     
     # Summary metrics (using Base case values)
     st.markdown("---")
@@ -2719,26 +2978,39 @@ elif st.session_state.active_sheet == "📈 P&L":
 elif st.session_state.active_sheet == "📄 Balance Sheet":
     st.header("🏦 Balance Sheet")
     
-    years = list(range(0, st.session_state.investment_horizon + 1))
+    semi_annual = st.session_state.semi_annual_mode
+    periods_per_year = 2 if semi_annual else 1
+    
+    # Build list of periods to iterate
+    if semi_annual:
+        periods = []
+        for year in range(0, st.session_state.investment_horizon + 1):
+            if year == 0:
+                periods.append((0, 0, "Construction"))
+            else:
+                periods.append((year, 1, f"Y{year}-H1"))
+                periods.append((year, 2, f"Y{year}-H2"))
+    else:
+        periods = [(year, 1, f"Y{year}" if year > 0 else "Construction") for year in range(0, st.session_state.investment_horizon + 1)]
     
     gfa = calculate_total_capex()
-    # Depreciation rate = 1/investment_horizon (straight-line)
-    depreciation_rate = 1.0 / st.session_state.investment_horizon
-    depreciation_period = st.session_state.investment_horizon
+    depreciation_rate = st.session_state.depreciation_rate  # Per period (annual or semi-annual)
+    depreciation_period = st.session_state.depreciation_period * periods_per_year  # In periods
     total_debt = calculate_debt_amount()
-    shareholder_equity = calculate_equity_amount()  # Initial equity from shareholders
+    shareholder_equity = calculate_equity_amount()
     tax_rate = st.session_state.corporate_tax_rate
-    interest_rate = calculate_interest_rate()
+    interest_rate = calculate_interest_rate() / periods_per_year  # Per period
     
-    # Track values
     accumulated_depr = 0
     retained_earnings = 0
     senior_debt_balance = total_debt
-    shareholder_loan_balance = shareholder_equity  # SH loan as initial equity contribution
+    shareholder_loan_balance = shareholder_equity
     cash_balance = 0
     
     bs_data = []
-    for year in years:
+    for period_item in periods:
+        year, period_in_year, year_label = period_item
+        
         if year == 0:
             # Construction year
             gross_fa = gfa
@@ -2752,48 +3024,52 @@ elif st.session_state.active_sheet == "📄 Balance Sheet":
             total_liabilities = sh_loan + sr_debt
             total_assets = net_fa + cash
         else:
-            # Calculate depreciation
-            if year <= depreciation_period:
-                remaining_value = max(0, gfa - accumulated_depr)
-                if remaining_value > 0:
-                    annual_depr = min(remaining_value * depreciation_rate, remaining_value)
-                    accumulated_depr += annual_depr
-                else:
-                    annual_depr = 0
+            # Semi-annual: half year
+            period_fraction = 1.0 / periods_per_year
+            
+            # Depreciation (straight-line over period)
+            if accumulated_depr < gfa:
+                annual_depr = min(gfa * depreciation_rate, gfa - accumulated_depr)
+                accumulated_depr += annual_depr
             else:
                 annual_depr = 0
             net_fa = gfa - accumulated_depr
             
-            # Calculate P&L items
-            annual_ds = get_debt_service(year) if year <= st.session_state.debt_tenor else 0
-            annual_rev = calculate_revenue(year)
-            annual_opex = calculate_opex_year(year)
-            ebitda = annual_rev - annual_opex
+            # Revenue and OPEX for this half-year
+            revenue = calculate_revenue(year) * period_fraction
+            opex = calculate_opex_year(year) * period_fraction
+            ebitda = revenue - opex
             
-            # Interest = average debt balance × interest rate
-            avg_debt = (senior_debt_balance + (senior_debt_balance + annual_ds * (st.session_state.debt_tenor - year + 1) / st.session_state.debt_tenor if year <= st.session_state.debt_tenor else 0)) / 2
+            # Debt service for this period
+            debt_service = get_debt_service(year, period_in_year) if year <= st.session_state.debt_tenor else 0
+            
+            # Interest on average debt balance
+            avg_debt = senior_debt_balance * 0.5
             interest = avg_debt * interest_rate
             
-            # Net Income = EBITDA - Depreciation - Interest - Tax
-            taxable_income = max(0, ebitda - annual_depr - interest)
-            tax = taxable_income * tax_rate
-            net_inc = ebitda - annual_depr - interest - tax
+            # Tax (only at year-end in semi-annual, or accumulate)
+            if period_in_year == periods_per_year:  # Year-end
+                # Annual tax calculation (use full year taxable income)
+                annual_rev = calculate_revenue(year)
+                annual_opex = calculate_opex_year(year)
+                annual_ebitda = annual_rev - annual_opex
+                annual_depr_full = gfa * (1.0 / st.session_state.depreciation_period)  # Full year depr
+                taxable = max(0, annual_ebitda - annual_depr_full - interest * periods_per_year)
+                tax = max(0, taxable * tax_rate)
+            else:
+                tax = 0  # No tax until year-end
             
-            # Retained Earnings accumulates net income
+            net_inc = ebitda - interest - tax
             retained_earnings += net_inc
             
-            # Track cash flow
-            fcf = ebitda - annual_ds  # FCF after senior debt service
-            
-            # Cash increases by FCF (simplified - assumes all FCF goes to cash reserve)
+            # Cash flow
+            fcf = ebitda - debt_service
             cash_balance += max(0, fcf)
             
-            # Senior debt decreases by scheduled repayment
+            # Debt repayment
             if year <= st.session_state.debt_tenor and senior_debt_balance > 0:
-                # Principal portion of debt service
-                principal_pct = 1.0 / max(1, st.session_state.debt_tenor - year + 1)
-                principal_paydown = min(annual_ds * principal_pct, senior_debt_balance)
-                senior_debt_balance = max(0, senior_debt_balance - principal_paydown)
+                principal = debt_service - interest
+                senior_debt_balance = max(0, senior_debt_balance - principal)
             
             sh_loan = shareholder_loan_balance
             ret_earn = retained_earnings
@@ -2802,10 +3078,10 @@ elif st.session_state.active_sheet == "📄 Balance Sheet":
             total_liabilities = sh_loan + sr_debt + total_equity
             total_assets = net_fa + cash_balance
         
-        balance_check = total_assets - (total_liabilities)
+        balance_check = total_assets - total_liabilities
         
         bs_data.append({
-            'Year': f"Y{year}" if year > 0 else "Construction",
+            'Period': year_label,
             'Gross FA': gfa,
             'Accum Depr': -accumulated_depr,
             'Net FA': net_fa,
@@ -2824,24 +3100,25 @@ elif st.session_state.active_sheet == "📄 Balance Sheet":
     
     # Chart - Assets side
     fig = make_subplots(specs=[[{"secondary_y": False}]])
-    fig.add_trace(go.Bar(x=[d['Year'] for d in bs_data], y=[d['Net FA'] for d in bs_data], name='Net FA', marker_color='#217346'), secondary_y=False)
-    fig.add_trace(go.Bar(x=[d['Year'] for d in bs_data], y=[d['Cash'] for d in bs_data], name='Cash', marker_color='#4CAF50'), secondary_y=False)
-    fig.add_trace(go.Scatter(x=[d['Year'] for d in bs_data], y=[d['Total Assets'] for d in bs_data], name='Total Assets', mode='lines+markers', line=dict(color='black', width=2)), secondary_y=False)
+    fig.add_trace(go.Bar(x=[d['Period'] for d in bs_data], y=[d['Net FA'] for d in bs_data], name='Net FA', marker_color='#217346'), secondary_y=False)
+    fig.add_trace(go.Bar(x=[d['Period'] for d in bs_data], y=[d['Cash'] for d in bs_data], name='Cash', marker_color='#4CAF50'), secondary_y=False)
+    fig.add_trace(go.Scatter(x=[d['Period'] for d in bs_data], y=[d['Total Assets'] for d in bs_data], name='Total Assets', mode='lines+markers', line=dict(color='black', width=2)), secondary_y=False)
     fig.update_layout(title='ASSETS', xaxis_title='Period', yaxis_title='k€', barmode='stack', template='plotly_white', height=400)
     st.plotly_chart(fig, use_container_width=True)
     
     # Chart - Liabilities & Equity side
     fig2 = make_subplots(specs=[[{"secondary_y": False}]])
-    fig2.add_trace(go.Bar(x=[d['Year'] for d in bs_data], y=[d['Shareholder Loan'] for d in bs_data], name='Sh. Loan', marker_color='#FFC107'), secondary_y=False)
-    fig2.add_trace(go.Bar(x=[d['Year'] for d in bs_data], y=[d['Senior Debt'] for d in bs_data], name='Sr. Debt', marker_color='#C55A11'), secondary_y=False)
-    fig2.add_trace(go.Bar(x=[d['Year'] for d in bs_data], y=[d['Retained Earnings'] for d in bs_data], name='Ret. Earnings', marker_color='#00B0F0'), secondary_y=False)
-    fig2.add_trace(go.Scatter(x=[d['Year'] for d in bs_data], y=[d['Total L&E'] for d in bs_data], name='Total L&E', mode='lines+markers', line=dict(color='black', width=2)), secondary_y=False)
+    fig2.add_trace(go.Bar(x=[d['Period'] for d in bs_data], y=[d['Shareholder Loan'] for d in bs_data], name='Sh. Loan', marker_color='#FFC107'), secondary_y=False)
+    fig2.add_trace(go.Bar(x=[d['Period'] for d in bs_data], y=[d['Senior Debt'] for d in bs_data], name='Sr. Debt', marker_color='#C55A11'), secondary_y=False)
+    fig2.add_trace(go.Bar(x=[d['Period'] for d in bs_data], y=[d['Retained Earnings'] for d in bs_data], name='Ret. Earnings', marker_color='#00B0F0'), secondary_y=False)
+    fig2.add_trace(go.Scatter(x=[d['Period'] for d in bs_data], y=[d['Total L&E'] for d in bs_data], name='Total L&E', mode='lines+markers', line=dict(color='black', width=2)), secondary_y=False)
     fig2.update_layout(title='LIABILITIES & EQUITY', xaxis_title='Period', yaxis_title='k€', barmode='stack', template='plotly_white', height=400)
     st.plotly_chart(fig2, use_container_width=True)
     
     # Table
     st.markdown("---")
-    st.markdown(f"#### 📋 Balance Sheet (k€) | Depr: {depreciation_rate*100:.2f}%/yr | Tax: {tax_rate*100:.0f}% | Int: {interest_rate*100:.2f}%")
+    depr_display = depreciation_rate * 100
+    st.markdown(f"#### 📋 Balance Sheet (k€) | Depr: {depr_display:.2f}%/period | Tax: {tax_rate*100:.0f}% | Int: {interest_rate*100:.2f}%/period")
     
     display_bs = bs_df.copy()
     for col in ['Gross FA', 'Accum Depr', 'Net FA', 'Cash', 'Total Assets', 'Shareholder Loan', 'Senior Debt', 'Total Debt', 'Retained Earnings', 'Total Equity', 'Total L&E']:
@@ -2863,10 +3140,27 @@ elif st.session_state.active_sheet == "📄 Balance Sheet":
 elif st.session_state.active_sheet == "💵 Cash Flow":
     st.header("💰 Cash Flow Statement")
     
-    years = list(range(0, st.session_state.investment_horizon + 1))
+    semi_annual = st.session_state.semi_annual_mode
+    periods_per_year = 2 if semi_annual else 1
+    
+    # Build list of periods
+    if semi_annual:
+        periods = []
+        for year in range(0, st.session_state.investment_horizon + 1):
+            if year == 0:
+                periods.append((0, 0, "Construction"))
+            else:
+                periods.append((year, 1, f"Y{year}-H1"))
+                periods.append((year, 2, f"Y{year}-H2"))
+    else:
+        periods = [(year, 1, f"Y{year}") for year in range(0, st.session_state.investment_horizon + 1)]
     
     cf_data = []
-    for year in years:
+    accumulated_losses = 0
+    
+    for period_item in periods:
+        year, period_in_year, year_label = period_item
+        
         if year == 0:
             capex = -calculate_total_capex()
             revenue = 0
@@ -2880,23 +3174,37 @@ elif st.session_state.active_sheet == "💵 Cash Flow":
             bess_cost = 0
         else:
             capex = 0
-            revenue = calculate_revenue(year)
-            opex = calculate_opex_year(year)
+            period_fraction = 1.0 / periods_per_year
+            
+            # Semi-annual revenue and opex
+            annual_rev = calculate_revenue(year)
+            annual_opex = calculate_opex_year(year)
+            revenue = annual_rev * period_fraction
+            opex = annual_opex * period_fraction
             
             # Add BESS if enabled
-            bess_rev = calculate_bess_revenue(year) if st.session_state.bess_enabled else 0
-            bess_cost = calculate_bess_costs(year) if st.session_state.bess_enabled else 0
+            bess_rev = calculate_bess_revenue(year) * period_fraction if st.session_state.bess_enabled else 0
+            bess_cost = calculate_bess_costs(year) * period_fraction if st.session_state.bess_enabled else 0
             
             revenue += bess_rev
             opex += bess_cost
             
             ebitda = revenue - opex
-            tax = calculate_tax(year)
-            debt_service = get_debt_service(year)
+            
+            # Tax calculation (only at year-end in semi-annual)
+            if period_in_year == periods_per_year:  # Year-end
+                annual_tax, _, _, new_losses = calculate_tax(year, accumulated_losses)
+                tax = annual_tax
+                accumulated_losses = new_losses
+            else:
+                tax = 0
+            
+            debt_service = get_debt_service(year, period_in_year) if year <= st.session_state.debt_tenor else 0
             fcf_banks = ebitda - tax
             fcf_equity = fcf_banks - debt_service
         
         cf_data.append({
+            'Period': year_label,
             'Year': year,
             'CAPEX': capex,
             'Revenue': revenue,
@@ -2919,7 +3227,10 @@ elif st.session_state.active_sheet == "💵 Cash Flow":
         st.metric("Senior Debt", f"{calculate_debt_amount():,.0f} k€")
     with col2:
         annual_ds = calculate_annual_debt_service()
-        st.metric("Annual DS", f"{annual_ds:,.0f} k€")
+        if semi_annual:
+            st.metric("Period DS (H1/H2)", f"{annual_ds/2:,.0f} k€")
+        else:
+            st.metric("Annual DS", f"{annual_ds:,.0f} k€")
     with col3:
         avg_dscr = cf_df[cf_df['Year'] > 0]['DSCR'].mean()
         st.metric("Avg DSCR", f"{avg_dscr:.2f}x")
@@ -2933,7 +3244,7 @@ elif st.session_state.active_sheet == "💵 Cash Flow":
     fig = go.Figure()
     
     fig.add_trace(go.Scatter(
-        x=[f"Y{d['Year']}" for d in cf_data if d['Year'] > 0], 
+        x=[d['Period'] for d in cf_data if d['Year'] > 0], 
         y=[d['EBITDA'] for d in cf_data if d['Year'] > 0], 
         name='EBITDA',
         mode='lines+markers',
@@ -2942,7 +3253,7 @@ elif st.session_state.active_sheet == "💵 Cash Flow":
     ))
     
     fig.add_trace(go.Scatter(
-        x=[f"Y{d['Year']}" for d in cf_data if d['Year'] > 0], 
+        x=[d['Period'] for d in cf_data if d['Year'] > 0], 
         y=[d['FCF Banks'] for d in cf_data if d['Year'] > 0], 
         name='FCF Banks',
         mode='lines+markers',
@@ -2951,7 +3262,7 @@ elif st.session_state.active_sheet == "💵 Cash Flow":
     ))
     
     fig.add_trace(go.Scatter(
-        x=[f"Y{d['Year']}" for d in cf_data if d['Year'] > 0], 
+        x=[d['Period'] for d in cf_data if d['Year'] > 0], 
         y=[d['FCF Equity'] for d in cf_data if d['Year'] > 0], 
         name='FCF Equity',
         mode='lines+markers',
@@ -2969,7 +3280,7 @@ elif st.session_state.active_sheet == "💵 Cash Flow":
     colors = ['#E53935' if d['DSCR'] < st.session_state.target_dscr else '#10B981' for d in dscr_data]
     
     fig2.add_trace(go.Bar(
-        x=[f"Y{d['Year']}" for d in dscr_data], 
+        x=[d['Period'] for d in dscr_data], 
         y=[d['DSCR'] for d in dscr_data], 
         name='DSCR',
         marker_color=colors,
@@ -3011,15 +3322,19 @@ elif st.session_state.active_sheet == "🏦 Debt Service":
     payment_dates = get_payment_dates(freq)
     payments_per_year = len(payment_dates)
     
-    # Debt Sculpting controls
-    col1, col2, col3 = st.columns([1, 1, 1])
+    # Debt Sizing method
+    col0, col1, col2 = st.columns([1, 1, 1])
+    with col0:
+        debt_sizing_method = st.selectbox("Debt Sizing Method", ["Gearing Ratio", "DSCR-Based (Annuity)", "DSCR-Based (Sculpted)"], index=2 if st.session_state.debt_sculpting else 0)
+        st.session_state.debt_sizing_method = debt_sizing_method
     with col1:
         st.session_state.debt_sculpting = st.checkbox("🔧 Debt Sculpting", value=st.session_state.debt_sculpting, help="When enabled, debt payments are adjusted to maintain target DSCR")
     with col2:
         target_dscr = st.slider("Target DSCR", min_value=1.0, max_value=2.0, value=st.session_state.target_dscr, step=0.05, format="%.2f", help="Minimum DSCR that debt service must maintain")
         st.session_state.target_dscr = target_dscr
-    with col3:
-        st.write(f"Current: **{st.session_state.target_dscr:.2f}x** | **{freq_label}** ({payments_per_year}x/year)")
+    
+    if "DSCR-Based" in st.session_state.debt_sizing_method:
+        st.caption(f"💡 DSCR-Based sizing: Max debt = NPV(CF/DSCR_target, rate) at {st.session_state.target_dscr}x")
     
     debt = calculate_debt_amount()
     rate = calculate_interest_rate()
@@ -3249,7 +3564,7 @@ elif st.session_state.active_sheet == "💎 Equity":
             cf = -equity_amount
         else:
             ebitda = calculate_ebitda(year)
-            tax = calculate_tax(year)
+            tax, _, _, _ = calculate_tax(year)
             debt_service = get_debt_service(year)
             fcf_banks = ebitda - tax
             cf = fcf_banks - debt_service
@@ -3316,7 +3631,7 @@ elif st.session_state.active_sheet == "📈 Sensitivity":
     base_debt = calculate_debt_amount()
     base_ds = calculate_annual_debt_service()
     base_dscr = base_ebitda / base_ds if base_ds > 0 else 0
-    base_irr = calculate_project_irr([-base_capex] + [calculate_ebitda(y) - calculate_tax(y) for y in range(1, 30)])
+    base_irr = calculate_project_irr([-base_capex] + [calculate_ebitda(y) - calculate_tax(y, 0)[0] for y in range(1, 30)])
     
     # Create sensitivity ranges
     if selected_param == 'Yield P90':
@@ -3362,7 +3677,7 @@ elif st.session_state.active_sheet == "📈 Sensitivity":
         debt = calculate_debt_amount()
         ds = calculate_annual_debt_service()
         dscr = ebitda / ds if ds > 0 else 0
-        irr = calculate_project_irr([-capex] + [calculate_ebitda(y) - calculate_tax(y) for y in range(1, 30)])
+        irr = calculate_project_irr([-capex] + [calculate_ebitda(y) - calculate_tax(y, 0)[0] for y in range(1, 30)])
         
         sensitivity_data.append({
             'Scenario': label,
@@ -3419,7 +3734,7 @@ elif st.session_state.active_sheet == "🔄 Comparison":
                 a_capex = calculate_total_capex()
                 a_debt = calculate_debt_amount()
                 a_equity = calculate_equity_amount()
-                a_irr = calculate_project_irr([-a_capex] + [calculate_ebitda(y) - calculate_tax(y) for y in range(1, 30)])
+                a_irr = calculate_project_irr([-a_capex] + [calculate_ebitda(y) - calculate_tax(y, 0)[0] for y in range(1, 30)])
                 a_dscr = calculate_avg_dscr()
                 a_lcoe = calculate_lcoe()
                 a_gen = calculate_annual_generation()
@@ -3436,7 +3751,7 @@ elif st.session_state.active_sheet == "🔄 Comparison":
                 b_capex = calculate_total_capex()
                 b_debt = calculate_debt_amount()
                 b_equity = calculate_equity_amount()
-                b_irr = calculate_project_irr([-b_capex] + [calculate_ebitda(y) - calculate_tax(y) for y in range(1, 30)])
+                b_irr = calculate_project_irr([-b_capex] + [calculate_ebitda(y) - calculate_tax(y, 0)[0] for y in range(1, 30)])
                 b_dscr = calculate_avg_dscr()
                 b_lcoe = calculate_lcoe()
                 b_gen = calculate_annual_generation()
@@ -3505,7 +3820,7 @@ elif st.session_state.active_sheet == "📤 Outputs":
     total_capex = calculate_total_capex()
     
     # Project returns
-    cash_flows = [-total_capex] + [calculate_ebitda(y) - calculate_tax(y) - (annual_ds if y <= st.session_state.debt_tenor else 0) for y in range(1, st.session_state.investment_horizon + 1)]
+    cash_flows = [-total_capex] + [calculate_ebitda(y) - calculate_tax(y, 0)[0] - (annual_ds if y <= st.session_state.debt_tenor else 0) for y in range(1, st.session_state.investment_horizon + 1)]
     project_irr = calculate_project_irr(cash_flows)
     project_npv = calculate_npv(cash_flows)
     
@@ -3578,7 +3893,7 @@ elif st.session_state.active_sheet == "⚙️ Advanced":
     
     tech = st.session_state.technology
     
-    adv_tabs = ["LCOE", "Monte Carlo", "Cash Sweep", "PLCR", "Resource Analysis"]
+    adv_tabs = ["LCOE", "Monte Carlo", "Cash Sweep", "Reserve Accounts", "Cash Flow Waterfall", "PLCR", "Resource Analysis"]
     if tech == "Wind":
         adv_tabs.append("Merchant Tail")
     
@@ -3694,6 +4009,171 @@ elif st.session_state.active_sheet == "⚙️ Advanced":
         
         if total_sweep > 0:
             st.info(f"💡 Cash sweep reduces debt by {total_sweep:,.0f} k€ over {years_saved} years, shortening effective debt tenor.")
+    
+    # ===== RESERVE ACCOUNTS =====
+    elif selected_adv_tab == "Reserve Accounts":
+        st.subheader("🏦 Reserve Accounts Analysis")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.session_state.dsra_enabled = st.checkbox("DSRA (Debt Service Reserve)", value=st.session_state.dsra_enabled)
+            dsra_months = st.slider("DSRA Months", min_value=3, max_value=12, value=int(st.session_state.dsra_months), step=1, disabled=not st.session_state.dsra_enabled)
+            st.session_state.dsra_months = dsra_months
+        with col2:
+            st.session_state.mra_enabled = st.checkbox("MRA (Maintenance Reserve)", value=st.session_state.mra_enabled)
+            mra_months = st.slider("MRA Months", min_value=1, max_value=6, value=int(st.session_state.mra_months), step=1, disabled=not st.session_state.mra_enabled)
+            st.session_state.mra_months = mra_months
+        with col3:
+            annual_ds = calculate_annual_debt_service()
+            annual_opex = calculate_total_opex_y1()
+            dsra_target = annual_ds * (dsra_months / 12) if st.session_state.dsra_enabled else 0
+            mra_target = annual_opex * (mra_months / 12) if st.session_state.mra_enabled else 0
+            st.metric("DSRA Target", f"{dsra_target:,.0f} k€" if st.session_state.dsra_enabled else "Disabled")
+            st.metric("MRA Target", f"{mra_target:,.0f} k€" if st.session_state.mra_enabled else "Disabled")
+        
+        # Calculate reserve account balances over time
+        reserve_data = []
+        years_list = list(range(1, int(st.session_state.investment_horizon) + 1))
+        dsra_balance = 0
+        mra_balance = 0
+        total_reserves = 0
+        
+        for year in years_list:
+            ebitda = calculate_ebitda(year)
+            debt_service = get_debt_service(year)
+            opex = calculate_opex_year(year)
+            
+            # DSRA: top up if balance < target, release if > target (after debt service)
+            if st.session_state.dsra_enabled:
+                dsra_target = annual_ds * (st.session_state.dsra_months / 12)
+                # Top up to target from excess cash after debt service
+                excess = ebitda - debt_service
+                if excess > 0 and dsra_balance < dsra_target:
+                    top_up = min(excess * 0.5, dsra_target - dsra_balance)  # 50% of excess goes to DSRA
+                    dsra_balance += top_up
+                elif dsra_balance > dsra_target:
+                    dsra_balance = dsra_target  # Release excess
+            
+            # MRA: top up for maintenance reserve
+            if st.session_state.mra_enabled:
+                mra_target = annual_opex * (st.session_state.mra_months / 12)
+                mra_balance = min(mra_balance + opex * 0.1, mra_target)  # 10% of opex goes to MRA
+            
+            total_reserves = dsra_balance + mra_balance
+            
+            reserve_data.append({
+                'Year': year,
+                'EBITDA': f"{ebitda:,.0f}",
+                'Debt Service': f"{debt_service:,.0f}",
+                'DSRA': f"{dsra_balance:,.0f}",
+                'MRA': f"{mra_balance:,.0f}",
+                'Total Reserves': f"{total_reserves:,.0f}"
+            })
+        
+        st.dataframe(pd.DataFrame(reserve_data), use_container_width=True, hide_index=True, height=400)
+        
+        total_required = dsra_target + mra_target
+        st.caption(f"💡 Total reserve requirement: ~{total_required:,.0f} k€ (held as restricted cash, not available for distribution)")
+    
+    # ===== CASH FLOW WATERFALL =====
+    elif selected_adv_tab == "Cash Flow Waterfall":
+        st.subheader("💧 Cash Flow Waterfall")
+        st.caption("Detailed breakdown of annual cash allocation")
+        
+        # Show detailed waterfall for each year
+        waterfall_data = []
+        years_list = list(range(1, int(st.session_state.investment_horizon) + 1))
+        
+        # Get annual totals
+        total_capex = calculate_total_capex()
+        debt = calculate_debt_amount()
+        interest_rate = calculate_interest_rate()
+        total_equity = calculate_equity_amount()
+        
+        cumulative_cash = 0
+        cumulative_debt = debt
+        
+        for year in years_list:
+            revenue = calculate_revenue(year)
+            opex = calculate_opex_year(year)
+            ebitda = revenue - opex
+            
+            # Depreciation (for tax purposes, not cash)
+            depreciation = total_capex * st.session_state.depreciation_rate
+            
+            # Interest calculation
+            if year <= st.session_state.debt_tenor:
+                avg_debt = cumulative_debt
+                interest = avg_debt * interest_rate
+            else:
+                interest = 0
+            
+            # Tax (simplified)
+            taxable = max(0, ebitda - depreciation - interest)
+            tax = taxable * st.session_state.corporate_tax_rate if year > st.session_state.ppa_term else 0
+            
+            # Debt service
+            debt_service = get_debt_service(year)
+            
+            # Principal repayment
+            principal = debt_service - interest
+            cumulative_debt = max(0, cumulative_debt - principal)
+            
+            # FCF after debt service
+            fcf_after_ds = ebitda - tax - debt_service
+            
+            # Cash sweep (if enabled)
+            sweep = 0
+            if st.session_state.cash_sweep_enabled:
+                schedule = calculate_cash_sweep_schedule()
+                sweep = schedule.get(year, 0)
+            
+            # Reserve contributions
+            dsra_contribution = 0
+            mra_contribution = 0
+            if st.session_state.dsra_enabled:
+                annual_ds = calculate_annual_debt_service()
+                dsra_target = annual_ds * (st.session_state.dsra_months / 12)
+                dsra_contribution = min(max(0, fcf_after_ds * 0.3), dsra_target * 0.2)  # 30% of FCF, limited
+            if st.session_state.mra_enabled:
+                mra_contribution = opex * 0.1  # 10% of opex
+            
+            # Available for distribution
+            distribution = max(0, fcf_after_ds - dsra_contribution - mra_contribution - sweep)
+            cumulative_cash += distribution
+            
+            waterfall_data.append({
+                'Year': year,
+                'Revenue': f"{revenue:,.0f}",
+                'OPEX': f"{-opex:,.0f}",
+                'EBITDA': f"{ebitda:,.0f}",
+                'Interest': f"{-interest:,.0f}",
+                'Tax': f"{-tax:,.0f}",
+                'Debt Service': f"{-debt_service:,.0f}",
+                '  Principal': f"{-principal:,.0f}",
+                'FCF': f"{fcf_after_ds:,.0f}",
+                'Sweep': f"{-sweep:,.0f}",
+                '→ Reserves': f"{-dsra_contribution - mra_contribution:,.0f}",
+                'Distributable': f"{distribution:,.0f}",
+                'Cumulative Cash': f"{cumulative_cash:,.0f}"
+            })
+        
+        st.dataframe(pd.DataFrame(waterfall_data), use_container_width=True, hide_index=True, height=500)
+        
+        # Summary
+        col1, col2, col3, col4 = st.columns(4)
+        total_distributed = sum(float(d['Distributable'].replace(',','')) for d in waterfall_data)
+        total_interest = sum(float(d['Interest'].replace(',','').replace('-','')) for d in waterfall_data)
+        total_tax = sum(float(d['Tax'].replace(',','').replace('-','')) for d in waterfall_data)
+        with col1:
+            st.metric("Total Interest", f"{total_interest:,.0f} k€")
+        with col2:
+            st.metric("Total Tax", f"{total_tax:,.0f} k€")
+        with col3:
+            st.metric("Total Distributed", f"{total_distributed:,.0f} k€")
+        with col4:
+            irr_approx = ((total_distributed / total_equity) ** (1/st.session_state.investment_horizon) - 1) * 100 if total_equity > 0 else 0
+            st.metric("Implied IRR", f"{irr_approx:.1f}%")
     
     # ===== PLCR =====
     elif selected_adv_tab == "PLCR":
@@ -3944,7 +4424,7 @@ def get_export_data():
                     'equity': calculate_equity_amount(),
                     'project_irr': 9.1,
                     'equity_irr': 12.7,
-                    'npv': calculate_npv([-calculate_total_capex()] + [calculate_ebitda(y) - calculate_tax(y) for y in range(1, 30)]),
+                    'npv': calculate_npv([-calculate_total_capex()] + [calculate_ebitda(y) - calculate_tax(y, 0)[0] for y in range(1, 30)]),
                     'lcoe': calculate_lcoe(),
                     'avg_dscr': 1.15,
                     'annual_generation': calculate_annual_generation(),
